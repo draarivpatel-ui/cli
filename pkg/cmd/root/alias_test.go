@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cli/cli/v2/pkg/iostreams"
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -120,4 +122,44 @@ func TestExpandShellAlias(t *testing.T) {
 			assert.Equal(t, tt.wantExpanded, gotExpanded)
 		})
 	}
+}
+
+func TestAliasSelfExpansion(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+
+	rootCmd := &cobra.Command{Use: "gh"}
+	issueCmd := &cobra.Command{Use: "issue"}
+	issueCmd.AddGroup(&cobra.Group{ID: "alias", Title: "Alias commands"})
+	rootCmd.AddCommand(issueCmd)
+	// An alias that expands to the same command line it provides.
+	issueCmd.AddCommand(NewCmdAlias(ios, "mine", "issue mine"))
+
+	rootCmd.SetArgs([]string{"issue", "mine"})
+	err := rootCmd.Execute()
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), `alias "mine" expands to itself`)
+}
+
+func TestAliasExpansionToDifferentCommand(t *testing.T) {
+	ios, _, _, _ := iostreams.Test()
+
+	rootCmd := &cobra.Command{Use: "gh"}
+	issueCmd := &cobra.Command{Use: "issue"}
+	issueCmd.AddGroup(&cobra.Group{ID: "alias", Title: "Alias commands"})
+	rootCmd.AddCommand(issueCmd)
+	prCmd := &cobra.Command{
+		Use: "pr",
+		RunE: func(c *cobra.Command, args []string) error {
+			return nil
+		},
+	}
+	rootCmd.AddCommand(prCmd)
+	// An alias that expands to a different command must keep working.
+	issueCmd.AddCommand(NewCmdAlias(ios, "prs", "pr list"))
+
+	rootCmd.SetArgs([]string{"issue", "prs"})
+	err := rootCmd.Execute()
+
+	assert.NoError(t, err)
 }

@@ -55,12 +55,19 @@ func NewCmdAlias(io *iostreams.IOStreams, aliasName, aliasValue string) *cobra.C
 		Use:   aliasName,
 		Short: fmt.Sprintf("Alias for %q", text.Truncate(80, aliasValue)),
 		RunE: func(c *cobra.Command, args []string) error {
+			if _, ok := c.Annotations[aliasInvocationAnnotation]; ok {
+				return fmt.Errorf("alias %q expands to itself", aliasName)
+			}
 			expandedArgs, err := expandAlias(aliasValue, args)
 			if err != nil {
 				return err
 			}
 			root := c.Root()
 			root.SetArgs(expandedArgs)
+			// Record the alias name so that a nested expansion of the same
+			// alias can be detected instead of recursing until the stack
+			// overflows.
+			c.Annotations[aliasInvocationAnnotation] = aliasName
 			return root.Execute()
 		},
 		GroupID:            "alias",

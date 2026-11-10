@@ -352,6 +352,12 @@ func BuildAliasList(cmd *cobra.Command, aliases []string) []string {
 // expands to, so that help rendering can resolve the alias to its target.
 const aliasExpansionAnnotation = "gh:alias-expansion"
 
+// aliasInvocationAnnotation records the name of the alias that the current
+// command execution expanded from, so that an alias whose expansion resolves
+// back to itself can be rejected instead of recursing until the stack
+// overflows.
+const aliasInvocationAnnotation = "gh:alias-invocation"
+
 // resolveAliasTarget returns the command a user-defined alias expands to, or
 // command unchanged when it is not an alias or the target cannot be resolved.
 // Shell aliases have no target command and are always returned unchanged.
