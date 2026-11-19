@@ -22,7 +22,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/microsoft/dev-tunnels/go/tunnels"
 	tunnelssh "github.com/microsoft/dev-tunnels/go/tunnels/ssh"
-	"github.com/microsoft/dev-tunnels/go/tunnels/ssh/messages"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -224,12 +223,9 @@ func NewMockHttpClient(opts ...mockClientOpt) (*http.Client, error) {
 
 type relayServer struct {
 	httpServer  *httptest.Server
-	errc        chan error
 	sshConfig   *ssh.ServerConfig
 	channels    map[string]channelHandler
 	accessToken string
-
-	serverConn *ssh.ServerConn
 }
 
 type relayServerOption func(*relayServer)
@@ -237,7 +233,6 @@ type channelHandler func(context.Context, ssh.NewChannel) error
 
 func newMockrelayServer(opts ...relayServerOption) (*relayServer, error) {
 	server := &relayServer{
-		errc: make(chan error),
 		sshConfig: &ssh.ServerConfig{
 			NoClientAuth: true,
 		},
@@ -283,79 +278,31 @@ func (rs *relayServer) URL() string {
 	return rs.httpServer.URL
 }
 
-func (rs *relayServer) Err() <-chan error {
-	return rs.errc
-}
-
-func (rs *relayServer) sendError(err error) {
-	select {
-	case rs.errc <- err:
-	default:
-		// channel is blocked with a previous error, so we ignore this one
-	}
-}
-
-func (rs *relayServer) ForwardPort(ctx context.Context, port uint16) error {
-	pfr := messages.NewPortForwardRequest("127.0.0.1", uint32(port))
-	b, err := pfr.Marshal()
-	if err != nil {
-		return fmt.Errorf("error marshaling port forward request: %w", err)
-	}
-
-	replied, data, err := rs.serverConn.SendRequest(messages.PortForwardRequestType, true, b)
-	if err != nil {
-		return fmt.Errorf("error sending port forward request: %w", err)
-	}
-
-	if !replied {
-		return fmt.Errorf("port forward request not replied")
-	}
-
-	if data == nil {
-		return fmt.Errorf("no data returned")
-	}
-
-	return nil
-}
-
 func makeConnection(server *relayServer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		if server.accessToken != "" {
-			if r.Header.Get("Authorization") != server.accessToken {
-				server.sendError(fmt.Errorf("invalid access token"))
-				return
-			}
+		if server.accessToken != "" && r.Header.Get("Authorization") != server.accessToken {
+			return
 		}
 
 		upgrader := websocket.Upgrader{}
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			server.sendError(fmt.Errorf("error upgrading to websocket: %w", err))
 			return
 		}
-		defer func() {
-			if err := c.Close(); err != nil {
-				server.sendError(fmt.Errorf("error closing websocket: %w", err))
-			}
-		}()
+		defer c.Close()
 
 		socketConn := newSocketConn(c)
-		serverConn, chans, reqs, err := ssh.NewServerConn(socketConn, server.sshConfig)
+		_, chans, reqs, err := ssh.NewServerConn(socketConn, server.sshConfig)
 		if err != nil {
-			server.sendError(fmt.Errorf("error creating ssh server conn: %w", err))
 			return
 		}
 
 		go handleRequests(ctx, convertRequests(reqs))
 
-		server.serverConn = serverConn
-		if err := handleChannels(ctx, server, chans); err != nil {
-			server.sendError(fmt.Errorf("error handling channels: %w", err))
-			return
-		}
+		_ = handleChannels(ctx, server, chans)
 	}
 }
 
